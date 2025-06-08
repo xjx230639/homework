@@ -1,0 +1,539 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <math.h>
+
+#define ALPHABET_SIZE 26
+#define MAX_TEXT_LENGTH 1000
+
+// 英文字母频率表 (按字母顺序a-z)
+const float english_freq[ALPHABET_SIZE] = {
+    0.08167, 0.01492, 0.02782, 0.04253, 0.12702, 0.02228, 0.02015, // a-g
+    0.06094, 0.06966, 0.00153, 0.00772, 0.04025, 0.02406, 0.06749,  // h-n
+    0.07507, 0.01929, 0.00095, 0.05987, 0.06327, 0.09056,          // o-t
+    0.02758, 0.00978, 0.02360, 0.00150, 0.01974, 0.00074            // u-z
+};
+
+// 字母连接统计 (前一个字母是行，后一个字母是列)
+const float common_digraphs[ALPHABET_SIZE][ALPHABET_SIZE] = {
+    // 简化的常见字母连接频率 (实际应用中应该更详细)
+    {0, 2, 1, 1, 0, 1, 1, 0, 0, 0, 0, 2, 1, 2, 0, 1, 0, 2, 2, 2, 0, 0, 0, 0, 0, 0},
+    // ... 其他字母的连接频率 (实际实现中应填充完整)
+};
+
+// 常见英语单词和词组列表
+const char *common_words[] = {
+    "the", "and", "that", "have", "for", "not", "with", "you", "this", "but",
+    "his", "from", "they", "will", "would", "there", "their", "what", "about",
+    "which", "when", "were", "been", "out", "into", "your", "some", "could",
+    "them", "other", "than", "then", "now", "look", "only", "come", "over",
+    "think", "also", "back", "after", "used", "two", "how", "our", "work",
+    "first", "well", "way", "even", "new", "want", "because", "any", "these",
+    "give", "most", NULL
+};
+
+const char *common_phrases[] = {
+    "of the", "in the", "to the", "for the", "on the", "and the", "at the",
+    "by the", "with the", "from the", "as well as", "as soon as", "in order to",
+    "it is", "it was", "there is", "there are", "that the", "this is", "what is",
+    "which is", "who is", "when the", "where the", "why the", "how the",
+    "have been", "has been", "had been", "will be", "would be", "can be",
+    "should be", "more than", "less than", "not only", "but also", NULL
+};
+
+typedef struct {
+    char cipher;
+    char plain;
+    int fixed;  // 是否已确定映射关系
+} Mapping;
+
+// 字母统计结构体
+typedef struct {
+    char letter;  // 保存字母本身
+    int count;
+    float freq;
+} LetterStats;
+
+// 单表代换加密
+void encrypt(const char *plaintext, char *ciphertext, const char *key) {
+    for (int i = 0; plaintext[i]; i++) {
+        if (isalpha(plaintext[i])) {
+            char base = islower(plaintext[i]) ? 'a' : 'A';
+            int pos = tolower(plaintext[i]) - 'a';
+            ciphertext[i] = islower(plaintext[i]) ? tolower(key[pos]) : toupper(key[pos]);
+        } else {
+            ciphertext[i] = plaintext[i];
+        }
+    }
+    ciphertext[strlen(plaintext)] = '\0';
+}
+
+// 单表代换解密
+void decrypt(const char *ciphertext, char *plaintext, const char *key) {
+    char reverse_key[ALPHABET_SIZE];
+    for (int i = 0; i < ALPHABET_SIZE; i++) {
+        reverse_key[tolower(key[i]) - 'a'] = 'a' + i;
+    }
+    
+    for (int i = 0; ciphertext[i]; i++) {
+        if (isalpha(ciphertext[i])) {
+            char base = islower(ciphertext[i]) ? 'a' : 'A';
+            int pos = tolower(ciphertext[i]) - 'a';
+            plaintext[i] = islower(ciphertext[i]) ? reverse_key[pos] : toupper(reverse_key[pos]);
+        } else {
+            plaintext[i] = ciphertext[i];
+        }
+    }
+    plaintext[strlen(ciphertext)] = '\0';
+}
+
+// 统计字母频率
+void calculate_frequencies(const char *text, LetterStats stats[ALPHABET_SIZE]) {
+    int total_letters = 0;
+    
+    // 初始化统计
+    for (int i = 0; i < ALPHABET_SIZE; i++) {
+        stats[i].letter = 'a' + i;
+        stats[i].count = 0;
+        stats[i].freq = 0.0;
+    }
+    
+    // 统计字母出现次数
+    for (int i = 0; text[i]; i++) {
+        if (isalpha(text[i])) {
+            int pos = tolower(text[i]) - 'a';
+            stats[pos].count++;
+            total_letters++;
+        }
+    }
+    
+    // 计算频率
+    if (total_letters > 0) {
+        for (int i = 0; i < ALPHABET_SIZE; i++) {
+            stats[i].freq = (float)stats[i].count / total_letters;
+        }
+    }
+}
+
+// 比较函数，用于排序
+int compare_stats(const void *a, const void *b) {
+    const LetterStats *sa = (const LetterStats *)a;
+    const LetterStats *sb = (const LetterStats *)b;
+    
+    // 按频率降序排列
+    if (sa->freq > sb->freq) return -1;
+    if (sa->freq < sb->freq) return 1;
+    
+    // 频率相同则按字母顺序排列
+    return sa->letter - sb->letter;
+}
+void suggest_based_on_digraphs(const char *ciphertext, Mapping mappings[ALPHABET_SIZE]) {
+    // 统计双字母组合出现频率
+    int digraph_counts[ALPHABET_SIZE][ALPHABET_SIZE] = {0};
+    int total_digraphs = 0;
+    
+    // 计算双字母组合频率
+    for (int i = 0; ciphertext[i] && ciphertext[i+1]; i++) {
+        if (isalpha(ciphertext[i]) && isalpha(ciphertext[i+1])) {
+            int first = tolower(ciphertext[i]) - 'a';
+            int second = tolower(ciphertext[i+1]) - 'a';
+            digraph_counts[first][second]++;
+            total_digraphs++;
+        }
+    }
+    
+    if (total_digraphs == 0) return;
+    
+    // 找出最常见的双字母组合
+    int max_count = 0;
+    char common_digraph[3] = {0};
+    
+    for (int i = 0; i < ALPHABET_SIZE; i++) {
+        for (int j = 0; j < ALPHABET_SIZE; j++) {
+            if (digraph_counts[i][j] > max_count) {
+                max_count = digraph_counts[i][j];
+                common_digraph[0] = 'a' + i;
+                common_digraph[1] = 'a' + j;
+            }
+        }
+    }
+    
+    printf("最常见的双字母组合: %s (出现%d次, %.1f%%)\n", 
+           common_digraph, max_count, (float)max_count/total_digraphs*100);
+    
+    // 根据常见英语双字母组合给出建议
+    const char *common_english_digraphs[] = {"th", "he", "in", "er", "an", "re", "nd", "on", "en", "at"};
+    
+    for (int k = 0; k < 5 && k < sizeof(common_english_digraphs)/sizeof(common_english_digraphs[0]); k++) {
+        printf("考虑将 %c%c 映射为 %s\n", 
+               common_digraph[0], common_digraph[1], common_english_digraphs[k]);
+    }
+}
+// 根据频率分析给出破译建议
+void frequency_analysis(const char *ciphertext, Mapping mappings[ALPHABET_SIZE]) {
+    LetterStats cipher_stats[ALPHABET_SIZE];
+    LetterStats english_stats[ALPHABET_SIZE];
+    
+    // 计算密文字母频率
+    calculate_frequencies(ciphertext, cipher_stats);
+    
+    // 准备英语字母频率数据
+    for (int i = 0; i < ALPHABET_SIZE; i++) {
+        english_stats[i].letter = 'a' + i;
+        english_stats[i].freq = english_freq[i];
+        english_stats[i].count = 0; // 不使用count字段
+    }
+    
+    // 对频率进行排序
+    qsort(cipher_stats, ALPHABET_SIZE, sizeof(LetterStats), compare_stats);
+    qsort(english_stats, ALPHABET_SIZE, sizeof(LetterStats), compare_stats);
+    
+    // 重置所有映射关系
+    for (int i = 0; i < ALPHABET_SIZE; i++) {
+        mappings[i].cipher = 'a' + i;
+        mappings[i].plain = '?';
+        mappings[i].fixed = 0;
+    }
+    
+    // 建立频率分析建议的映射关系
+    printf("\n频率分析建议映射:\n");
+    printf("密文字母 -> 可能明文字母 (基于频率)\n");
+    printf("----------------------------------\n");
+    
+    for (int i = 0; i < ALPHABET_SIZE; i++) {
+        char cipher_char = cipher_stats[i].letter;
+        char plain_char = english_stats[i].letter;
+        
+        printf("%c -> %c (密文频率: %.2f%%, 英文频率: %.2f%%)\n",
+               cipher_char, plain_char, 
+               cipher_stats[i].freq * 100, 
+               english_stats[i].freq * 100);
+        
+        // 更新映射关系
+        mappings[cipher_char - 'a'].plain = plain_char;
+    }
+    
+    // 添加基于常见字母连接的额外建议
+    printf("\n基于字母连接的额外建议:\n");
+    suggest_based_on_digraphs(ciphertext, mappings);
+}
+
+// 基于字母连接的建议函数
+
+
+// 应用当前映射解密文本
+void apply_mappings(const char *ciphertext, char *plaintext, Mapping mappings[ALPHABET_SIZE]) {
+    for (int i = 0; ciphertext[i]; i++) {
+        if (isalpha(ciphertext[i])) {
+            int pos = tolower(ciphertext[i]) - 'a';
+            if (mappings[pos].fixed) {
+                plaintext[i] = islower(ciphertext[i]) ? mappings[pos].plain : toupper(mappings[pos].plain);
+            } else {
+                plaintext[i] = islower(ciphertext[i]) ? tolower(mappings[pos].plain) : toupper(mappings[pos].plain);
+            }
+        } else {
+            plaintext[i] = ciphertext[i];
+        }
+    }
+    plaintext[strlen(ciphertext)] = '\0';
+}
+
+// 显示当前解密结果和映射状态
+void display_current_state(const char *plaintext, Mapping mappings[ALPHABET_SIZE]) {
+    printf("\n当前解密结果:\n%s\n", plaintext);
+    
+    printf("\n当前映射关系 (小写字母):\n");
+    for (int i = 0; i < ALPHABET_SIZE; i++) {
+        if (mappings[i].fixed) {
+            printf("%c -> %c (已确认)\n", mappings[i].cipher, mappings[i].plain);
+        } else {
+            printf("%c -> %c (建议)\n", mappings[i].cipher, mappings[i].plain);
+        }
+    }
+}
+
+// 更新映射关系
+void update_mapping(Mapping mappings[ALPHABET_SIZE], char cipher_char, char plain_char) {
+    int cipher_pos = tolower(cipher_char) - 'a';
+    int plain_pos = tolower(plain_char) - 'a';
+    
+    // 更新映射
+    mappings[cipher_pos].plain = tolower(plain_char);
+    mappings[cipher_pos].fixed = 1;
+    
+    // 确保一对一映射 (移除其他对相同明文字母的映射)
+    for (int i = 0; i < ALPHABET_SIZE; i++) {
+        if (i != cipher_pos && mappings[i].plain == tolower(plain_char) && !mappings[i].fixed) {
+            mappings[i].plain = '?'; // 标记为未知
+        }
+    }
+}
+
+// 主破译循环
+void suggest_words(const char *partial_plaintext, Mapping mappings[ALPHABET_SIZE]) {
+    printf("\n可能的单词建议:\n");
+    
+    // 提取部分解密文本中的单词片段
+    char word[50];
+    int word_pos = 0;
+    int suggestions_found = 0;
+    
+    for (int i = 0; partial_plaintext[i]; i++) {
+        if (isalpha(partial_plaintext[i])) {
+            word[word_pos++] = tolower(partial_plaintext[i]);
+        } else if (word_pos > 0) {
+            word[word_pos] = '\0';
+            
+            // 检查这个部分解密单词是否匹配常见单词模式
+            for (int w = 0; common_words[w]; w++) {
+                if (strlen(word) == strlen(common_words[w])) {
+                    int match = 1;
+                    for (int c = 0; word[c]; c++) {
+                        if (word[c] != '?' && 
+                            mappings[word[c]-'a'].fixed && 
+                            mappings[word[c]-'a'].plain != common_words[w][c]) {
+                            match = 0;
+                            break;
+                        }
+                    }
+                    
+                    if (match) {
+                        printf("部分解密: %-10s 可能匹配: %s\n", word, common_words[w]);
+                        suggestions_found = 1;
+                        
+                        // 显示可能的字母映射
+                        for (int c = 0; word[c]; c++) {
+                            if (word[c] == '?') {
+                                printf("  位置 %d: 可能字母 %c\n", c+1, common_words[w][c]);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            word_pos = 0;
+        }
+    }
+    
+    if (!suggestions_found) {
+        printf("未找到明显的单词匹配。尝试确认更多字母映射以获取更好建议。\n");
+    }
+}
+
+// 分析可能的词组模式
+void suggest_phrases(const char *partial_plaintext, Mapping mappings[ALPHABET_SIZE]) {
+    printf("\n可能的词组建议:\n");
+    
+    // 将部分解密文本转换为小写以便分析
+    char lower_text[MAX_TEXT_LENGTH];
+    for (int i = 0; partial_plaintext[i]; i++) {
+        lower_text[i] = tolower(partial_plaintext[i]);
+    }
+    lower_text[strlen(partial_plaintext)] = '\0';
+    
+    int suggestions_found = 0;
+    
+    // 检查常见词组
+    for (int p = 0; common_phrases[p]; p++) {
+        const char *phrase = common_phrases[p];
+        int phrase_len = strlen(phrase);
+        
+        // 在文本中搜索可能的词组匹配
+        for (int i = 0; i <= strlen(lower_text) - phrase_len; i++) {
+            int match = 1;
+            for (int j = 0; j < phrase_len; j++) {
+                if (lower_text[i+j] == ' ') {
+                    if (phrase[j] != ' ') {
+                        match = 0;
+                        break;
+                    }
+                } else if (isalpha(lower_text[i+j])) {
+                    if (!isalpha(phrase[j])) {
+                        match = 0;
+                        break;
+                    }
+                    if (mappings[lower_text[i+j]-'a'].fixed && 
+                        mappings[lower_text[i+j]-'a'].plain != phrase[j]) {
+                        match = 0;
+                        break;
+                    }
+                }
+            }
+            
+            if (match) {
+                printf("位置 %d-%d 可能匹配词组: %s\n", i, i+phrase_len-1, phrase);
+                suggestions_found = 1;
+                
+                // 显示可能的字母映射
+                for (int j = 0; j < phrase_len; j++) {
+                    if (isalpha(lower_text[i+j]) && lower_text[i+j] != '?') {
+                        if (!mappings[lower_text[i+j]-'a'].fixed) {
+                            printf("  位置 %d: %c 可能映射为 %c\n", 
+                                   i+j, lower_text[i+j], phrase[j]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    if (!suggestions_found) {
+        printf("未找到明显的词组匹配。尝试确认更多字母映射以获取更好建议。\n");
+    }
+}
+
+// 增强的破译主循环
+void crack_cipher(const char *ciphertext) {
+    Mapping mappings[ALPHABET_SIZE];
+    char plaintext[MAX_TEXT_LENGTH];
+    
+    // 初始化映射
+    for (int i = 0; i < ALPHABET_SIZE; i++) {
+        mappings[i].cipher = 'a' + i;
+        mappings[i].plain = '?';
+        mappings[i].fixed = 0;
+    }
+    
+    // 初始频率分析
+    frequency_analysis(ciphertext, mappings);
+    
+    int continue_cracking = 1;
+    while (continue_cracking) {
+        // 应用当前映射
+        apply_mappings(ciphertext, plaintext, mappings);
+        display_current_state(plaintext, mappings);
+        
+        // 用户交互
+        printf("\n选择操作:\n");
+        printf("1. 确认一个映射关系\n");
+        printf("2. 重新进行频率分析\n");
+        printf("3. 显示可能的单词建议\n");
+        printf("4. 显示可能的词组建议\n");
+        printf("5. 显示字母连接建议\n");
+        printf("6. 退出破译\n");
+        printf("请输入选择: ");
+        
+        int choice;
+        scanf("%d", &choice);
+        getchar(); // 消耗换行符
+        
+        switch (choice) {
+            case 1: {
+                char cipher_char, plain_char;
+                printf("输入要确认的密文字母: ");
+                scanf("%c", &cipher_char);
+                getchar();
+                printf("输入对应的明文字母: ");
+                scanf("%c", &plain_char);
+                getchar();
+                
+                if (isalpha(cipher_char) && isalpha(plain_char)) {
+                    update_mapping(mappings, cipher_char, plain_char);
+                    printf("映射已更新: %c -> %c\n", cipher_char, plain_char);
+                } else {
+                    printf("无效输入，请输入字母\n");
+                }
+                break;
+            }
+            case 2:
+                frequency_analysis(ciphertext, mappings);
+                printf("已重新进行频率分析\n");
+                break;
+            case 3:
+                suggest_words(plaintext, mappings);
+                break;
+            case 4:
+                suggest_phrases(plaintext, mappings);
+                break;
+            case 5:
+                suggest_based_on_digraphs(ciphertext, mappings);
+                break;
+            case 6:
+                continue_cracking = 0;
+                break;
+            default:
+                printf("无效选择\n");
+        }
+    }
+    
+    printf("\n最终解密结果:\n%s\n", plaintext);
+}
+
+// 主菜单
+void main_menu() {
+    printf("=== 单表代换加密/解密工具 ===\n");
+    printf("1. 加密文本\n");
+    printf("2. 解密文本\n");
+    printf("3. 破译密文\n");
+    printf("4. 退出\n");
+    printf("请选择功能: ");
+}
+
+int main() {
+    int running = 1;
+    while (running) {
+        main_menu();
+        int choice;
+        scanf("%d", &choice);
+        getchar(); // 消耗换行符
+        
+        char text[MAX_TEXT_LENGTH];
+        char result[MAX_TEXT_LENGTH];
+        char key[ALPHABET_SIZE + 1];
+        
+        switch (choice) {
+            case 1: // 加密
+                printf("输入要加密的文本: ");
+                fgets(text, MAX_TEXT_LENGTH, stdin);
+                text[strcspn(text, "\n")] = '\0'; // 移除换行符
+                
+                printf("输入代换表 (26个字母的排列，如qwertyuiopasdfghjklzxcvbnm): ");
+                fgets(key, ALPHABET_SIZE + 1, stdin);
+                key[strcspn(key, "\n")] = '\0';
+                
+                if (strlen(key) != ALPHABET_SIZE) {
+                    printf("错误: 代换表必须是26个字母\n");
+                    break;
+                }
+                
+                encrypt(text, result, key);
+                printf("加密结果: %s\n", result);
+                break;
+                
+            case 2: // 解密
+                printf("输入要解密的文本: ");
+                fgets(text, MAX_TEXT_LENGTH, stdin);
+                text[strcspn(text, "\n")] = '\0';
+                
+                printf("输入代换表 (26个字母的排列): ");
+                fgets(key, ALPHABET_SIZE + 1, stdin);
+                key[strcspn(key, "\n")] = '\0';
+                
+                if (strlen(key) != ALPHABET_SIZE) {
+                    printf("错误: 代换表必须是26个字母\n");
+                    break;
+                }
+                
+                decrypt(text, result, key);
+                printf("解密结果: %s\n", result);
+                break;
+                
+            case 3: // 破译
+                printf("输入要破译的密文: ");
+                fgets(text, MAX_TEXT_LENGTH, stdin);
+                text[strcspn(text, "\n")] = '\0';
+                crack_cipher(text);
+                break;
+                
+            case 4: // 退出
+                running = 0;
+                break;
+                
+            default:
+                printf("无效选择\n");
+        }
+    }
+    
+    return 0;
+}
